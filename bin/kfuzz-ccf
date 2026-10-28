@@ -1,0 +1,11 @@
+#!/bin/bash
+# kfuzz-ccf [relative/path] -> absolute path inside cc-fuzzer's root (read-only).
+# The one place cc-kfuzz resolves cc-fuzzer. Order: $CC_FUZZER_ROOT, the kres
+# plugin dir, the legacy /opt clone, the newest plugin-cache install.
+set -euo pipefail
+latest_cache=$(ls -d "$HOME"/.claude/plugins/cache/*/cc-fuzzer/* 2>/dev/null | sort -V | tail -1 || true)
+for c in "${CC_FUZZER_ROOT:-}" /opt/kres/plugins/cc-fuzzer /opt/cc-fuzzer "$latest_cache"; do
+  [ -n "$c" ] && [ -f "$c/STATE_SCHEMA.md" ] && [ -f "$c/.claude-plugin/plugin.json" ] || continue
+  echo "${c%/}${1:+/$1}"; exit 0
+done
+echo "kfuzz-ccf: cc-fuzzer not found; set CC_FUZZER_ROOT" >&2; exit 1

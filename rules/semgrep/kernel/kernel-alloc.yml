@@ -1,0 +1,43 @@
+rules:
+  - id: kernel-alloc-mul-overflow
+    languages: [c]
+    severity: WARNING
+    message: >-
+      Open-coded multiplication in an allocation size can overflow; use
+      kmalloc_array()/kcalloc()/kvmalloc_array() or array_size()/struct_size().
+    pattern-either:
+      - pattern: kmalloc($A * $B, $F)
+      - pattern: kzalloc($A * $B, $F)
+      - pattern: kvmalloc($A * $B, $F)
+      - pattern: kvzalloc($A * $B, $F)
+      - pattern: vmalloc($A * $B)
+      - pattern: vzalloc($A * $B)
+    metadata: { cwe: "CWE-190", category: kernel-alloc }
+
+  - id: kernel-deprecated-strcpy
+    languages: [c]
+    severity: INFO
+    message: strcpy/strncpy/strlcpy are deprecated in the kernel; use strscpy() (Documentation/process/deprecated.rst).
+    pattern-either:
+      - pattern: strcpy($D, $S)
+      - pattern: strncpy($D, $S, $N)
+      - pattern: strlcpy($D, $S, $N)
+    metadata: { cwe: "CWE-120", category: kernel-alloc }
+
+  - id: kernel-use-after-kfree
+    languages: [c]
+    severity: WARNING
+    message: Pointer dereferenced after kfree() with no reassignment in between.
+    patterns:
+      - pattern-inside: |
+          kfree($P);
+          ...
+      - pattern-either:
+          - pattern: $P->$F
+          - pattern: "*$P"
+      - pattern-not-inside: |
+          kfree($P);
+          ...
+          $P = $E;
+          ...
+    metadata: { cwe: "CWE-416", category: kernel-alloc }

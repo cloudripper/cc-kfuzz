@@ -1,0 +1,42 @@
+#!/bin/bash
+# kfuzz-launch -- syz-manager lifecycle for a kfuzz campaign (wraps kres-syz-up).
+#   kfuzz-launch start            start syz-manager on kfuzz/syz with kernel KFUZZ_KERNEL_OUT
+#   kfuzz-launch stop             stop it (SIGINT, then SIGKILL after 30s)
+#   kfuzz-launch status           pid, liveness, http, last log line
+#   kfuzz-launch focus <a,b,...>  set enable_syscalls for the next start (sole writer of state/focus.json)
+#   kfuzz-launch focus --clear    fuzz all syscalls
+# Env: KFUZZ_DIR (default $PWD/kfuzz)  KFUZZ_KERNEL_OUT (/work/out/syzkaller)  KFUZZ_IMAGE_DIR (/work/image)
+set -euo pipefail
+K=${KFUZZ_DIR:-$PWD/kfuzz}; W=$K/syz; S=$K/state
+OUT=${KFUZZ_KERNEL_OUT:-/work/out/syzkaller}; IMGD=${KFUZZ_IMAGE_DIR:-/work/image}
+mkdir -p "$W" "$S" "$K/configs"
+pid() { local p; p=$(cat "$W/manager.pid" 2>/dev/null || echo 0); [[ $p =~ ^[0-9]+$ ]] || p=0; echo "$p"; }
+alive() { local p; p=$(pid); [ "$p" -gt 0 ] && kill -0 "$p" 2>/dev/null; }
+
+case ${1:-} in
+  start)
+    alive && { echo "kfuzz-launch: already running (pid $(pid))"; exit 0; }
+    command -v kres-syz-up >/dev/null || { echo "kfuzz-launch: kres-syz-up not on PATH (kres environment)"; exit 1; }
+    [ -f "$OUT/.config" ] || { echo "kfuzz-launch: no $OUT/.config; run kres-config syzkaller"; exit 1; }
+    sc=$(jq -r '(.enable_syscalls // []) | join(",")' "$S/focus.json" 2>/dev/null || true)
+    cp "$OUT/.config" "$K/configs/$(basename "$OUT").config"
+    KRES_SYSCALLS="$sc" kres-syz-up "$OUT" "$IMGD" "$W"
+    ;;
+  stop)
+    p=$(pid); alive || { echo "kfuzz-launch: not running"; exit 0; }
+    kill -INT "$p"; for _ in $(seq 30); do kill -0 "$p" 2>/dev/null || break; sleep 1; done
+    kill -0 "$p" 2>/dev/null && kill -KILL "$p"; echo "kfuzz-launch: stopped pid $p"
+    ;;
+  status)
+    http=$(jq -r '.http // "127.0.0.1:56741"' "$W/manager.cfg" 2>/dev/null || echo 127.0.0.1:56741)
+    if alive; then echo "running pid=$(pid) http=$http"; else echo "stopped pid=$(pid)"; fi
+    [ -f "$W/manager.log" ] && tail -1 "$W/manager.log" || true
+    ;;
+  focus)
+    shift; [ $# -eq 1 ] || { echo "usage: kfuzz-launch focus <a,b,...> | --clear"; exit 1; }
+    if [ "$1" = --clear ]; then echo '{"enable_syscalls":[]}' > "$S/focus.json"
+    else jq -n --arg s "$1" '{enable_syscalls:($s|split(",")|map(select(.!="")))}' > "$S/focus.json"; fi
+    cat "$S/focus.json"; alive && echo "kfuzz-launch: takes effect on next start (stop + start)" || true
+    ;;
+  *) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

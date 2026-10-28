@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "cc-kfuzz",
+  "displayName": "cc-kfuzz (kernel backend for cc-fuzzer)",
+  "version": "0.1.0",
+  "description": "Kernel fuzzing, crash triage, bisection and patch validation on syzkaller, following cc-fuzzer's control-plane conventions",
+  "author": { "name": "cloudripper" },
+  "homepage": "https://github.com/cloudripper/cc-kfuzz",
+  "repository": "https://github.com/cloudripper/cc-kfuzz",
+  "license": "MIT",
+  "keywords": ["fuzzing", "kernel", "syzkaller", "kcov", "kasan", "triage", "bisect"],
+  "dependencies": ["cc-fuzzer"],
+  "metadata": { "kstateSchema": "kstate/v1" }
+}

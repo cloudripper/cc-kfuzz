@@ -1,0 +1,42 @@
+#!/bin/bash
+# kfuzz-compat [--quiet] -- verify the cc-fuzzer surface listed in UPSTREAM.lock.
+# Exit 1 on breaking drift (missing file, vanished pattern, wrong plugin name).
+# NOTE lines (other tested_ref, upstream change to an adapted file) never fail.
+# --quiet prints nothing when there is neither drift nor a NOTE.
+set -uo pipefail
+QUIET=0; [ "${1:-}" = --quiet ] && QUIET=1
+HERE=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+LOCK=${KFUZZ_LOCK:-$HERE/UPSTREAM.lock}
+R=$("$HERE/bin/kfuzz-ccf") || { echo "kfuzz-compat: cc-fuzzer not found"; exit 1; }
+fail=0; notes=0
+say() { echo "kfuzz-compat: $*"; }
+while IFS= read -r line; do
+  case $line in
+    ''|'#'*) ;;
+    tested_ref=*)
+      want=${line#tested_ref=}; have=$(git -C "$R" rev-parse HEAD 2>/dev/null || echo unknown)
+      [ "$have" = "$want" ] || { say "NOTE: cc-fuzzer at ${have:0:12}, tested at ${want:0:12}"; notes=1; } ;;
+    name=*)
+      want=${line#name=}; have=$(jq -r .name "$R/.claude-plugin/plugin.json" 2>/dev/null)
+      [ "$have" = "$want" ] || { say "NAME: manifest says '$have', expected '$want'"; fail=1; } ;;
+    require=*)
+      f=${line#require=}; [ -e "$R/$f" ] || { say "MISSING: $f"; fail=1; } ;;
+    grep=*)
+      spec=${line#grep=}; f=${spec%%:*}; p=${spec#*:}
+      grep -qF -- "$p" "$R/$f" 2>/dev/null || { say "PATTERN GONE: '$p' in $f"; fail=1; } ;;
+    adapted=*)
+      spec=${line#adapted=}; src=${spec%% -> *}; rest=${spec#* -> }; dst=${rest%% *}
+      blob=${rest##*blob=}
+      if [ ! -e "$R/$src" ]; then say "MISSING: $src (adapted into $dst)"; fail=1
+      else
+        cur=$(git hash-object "$R/$src" 2>/dev/null || echo unknown)
+        [ "$cur" = "$blob" ] || { say "NOTE: upstream $src changed since tested_ref; review $dst"; notes=1; }
+      fi
+      [ -e "$HERE/$dst" ] || { say "MISSING local: $dst"; fail=1; } ;;
+    *) say "unknown lock line: $line"; fail=1 ;;
+  esac
+done < "$LOCK"
+if [ $fail = 0 ] && { [ $QUIET = 0 ] || [ $notes = 1 ]; }; then
+  echo "cc-fuzzer surface OK ($R)"
+fi
+exit $fail

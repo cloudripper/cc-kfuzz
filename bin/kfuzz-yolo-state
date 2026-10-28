@@ -1,0 +1,41 @@
+#!/bin/bash
+# kfuzz-yolo-state -- sole writer of kfuzz/state/budget.json (YOLO block).
+# Mirrors cc-fuzzer scripts/yolo-state.sh: the hard caps live here, not in a prompt.
+#   kfuzz-yolo-state on [--interval SEC] [--max-ticks N]   enable (defaults 1800, 48)
+#   kfuzz-yolo-state off [--reason TEXT]
+#   kfuzz-yolo-state status
+#   kfuzz-yolo-state next      count one tick and print the YOLO_NEXT line for a
+#                              quiet tick: inactive | halt (cap reached; disables) | schedule
+set -euo pipefail
+K=${KFUZZ_DIR:-$PWD/kfuzz}; S=$K/state; B=$S/budget.json; mkdir -p "$S"
+[ -f "$B" ] || echo '{"yolo":{"enabled":false}}' > "$B"
+put() { local t; t=$(mktemp "$S/.budget.XXXXXX"); jq "$@" "$B" > "$t" && mv "$t" "$B"; }
+cmd=${1:-status}; shift || true
+case $cmd in
+  on)
+    iv=1800; mx=48
+    while [ $# -gt 0 ]; do case $1 in
+      --interval) iv=$2; shift 2 ;; --max-ticks) mx=$2; shift 2 ;;
+      *) echo "unknown flag $1" >&2; exit 1 ;; esac; done
+    [[ $iv =~ ^[0-9]+$ && $mx =~ ^[0-9]+$ ]] || { echo "interval and max-ticks are integers" >&2; exit 1; }
+    [ "$iv" -lt 60 ] && iv=60; [ "$iv" -gt 3600 ] && iv=3600
+    put --argjson iv "$iv" --argjson mx "$mx" \
+      '.yolo={enabled:true, interval:$iv, max_ticks:$mx, ticks:0, started:(now|todate)}'
+    jq -c .yolo "$B" ;;
+  off)
+    r=manual; [ "${1:-}" = --reason ] && r=${2:-manual}
+    put --arg r "$r" '.yolo.enabled=false | .yolo.stopped=(now|todate) | .yolo.stop_reason=$r'
+    jq -c .yolo "$B" ;;
+  status) jq -c .yolo "$B" ;;
+  next)
+    if [ "$(jq -r '.yolo.enabled // false' "$B")" != true ]; then echo "YOLO_NEXT: inactive"; exit 0; fi
+    put '.yolo.ticks=((.yolo.ticks // 0) + 1)'
+    t=$(jq -r .yolo.ticks "$B"); mx=$(jq -r '.yolo.max_ticks // 48' "$B"); iv=$(jq -r '.yolo.interval // 1800' "$B")
+    if [ "$t" -ge "$mx" ]; then
+      put '.yolo.enabled=false | .yolo.stopped=(now|todate) | .yolo.stop_reason="max_ticks"'
+      echo "YOLO_NEXT: halt reason=\"max_ticks $mx reached\""
+    else
+      echo "YOLO_NEXT: schedule delay=$iv prompt=/cc-kfuzz:kfuzz-tick reason=\"tick $t/$mx\""
+    fi ;;
+  *) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

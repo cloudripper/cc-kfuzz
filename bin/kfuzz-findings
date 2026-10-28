@@ -1,0 +1,98 @@
+#!/bin/bash
+# kfuzz-findings -- the ONLY writer of kfuzz/state/{findings,dropped_crashes,annotations}.jsonl
+# and of kfuzz/verified/<id>/.
+# adapted from cc-fuzzer scripts/findings.sh @ 478a126; see UPSTREAM.lock
+#
+#   kfuzz-findings add <hash> <finding.json>       verify bundle in .work_dir, copy to verified/<id>/, append
+#   kfuzz-findings drop <hash> <reason> [note]     reason: infra no_repro harness_artifact duplicate not_kernel flaky other
+#   kfuzz-findings dup <hash> <id>                 drop as duplicate of an existing finding
+#   kfuzz-findings annotate <id> <field> <value>   field: cause_commit fix_commit bisect_status patch_status upstream note
+#   kfuzz-findings attach <id> <file> [relpath]    copy an artifact (bisect.log, patch/0001-x.patch) into the bundle
+#   kfuzz-findings get <id|hash>                   finding with annotations folded in
+#   kfuzz-findings list | count
+#
+# finding.json required: title class subsystem kernel_ref config work_dir
+#   work_dir must hold report.txt and repro.c (repro.syz when one exists; decoded.txt, run logs optional).
+# Append-only; atomic via flock. Exit: 0 ok, 1 usage, 2 validation, 3 duplicate/unknown.
+set -euo pipefail
+K=${KFUZZ_DIR:-$PWD/kfuzz}; S=$K/state; V=$K/verified
+FJ=$S/findings.jsonl; DJ=$S/dropped_crashes.jsonl; AJ=$S/annotations.jsonl
+CLASSES="KASAN KMSAN KCSAN UBSAN lockdep WARNING BUG hung_task rcu_stall other"
+REASONS="infra no_repro harness_artifact duplicate not_kernel flaky other"
+FIELDS="cause_commit fix_commit bisect_status patch_status upstream note"
+
+die() { echo "kfuzz-findings: $2" >&2; exit "$1"; }
+inlist() { local x=$1; shift; for y in $*; do [ "$x" = "$y" ] && return 0; done; return 1; }
+lock() { mkdir -p "$S"; exec 9>"$S/.lock"; flock -w 30 9 || die 1 "state lock busy"; }
+ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+find_id() { jq -r --arg k "$1" 'select(.id==$k or .hash==$k) | .id' "$FJ" 2>/dev/null | head -1; }
+logs_of() { ls "$K/syz/crashes/$1" 2>/dev/null | grep -c '^log' || true; }
+title_of() { head -1 "$K/syz/crashes/$1/description" 2>/dev/null || true; }
+
+cmd=${1:-}; shift || true
+case $cmd in
+  add)
+    [ $# -eq 2 ] || die 1 "usage: add <hash> <finding.json>"
+    h=$1; f=$2; [ -f "$f" ] || die 2 "no such file: $f"
+    jq -e . "$f" >/dev/null 2>&1 || die 2 "not JSON: $f"
+    for k in title class subsystem kernel_ref config work_dir; do
+      [ -n "$(jq -r --arg k "$k" '.[$k] // empty' "$f")" ] || die 2 "missing field: $k"
+    done
+    cls=$(jq -r .class "$f"); inlist "$cls" $CLASSES || die 2 "class '$cls' not in: $CLASSES"
+    wd=$(jq -r .work_dir "$f")
+    for a in report.txt repro.c; do [ -s "$wd/$a" ] || die 2 "work_dir lacks $a: $wd"; done
+    syz=null; [ -s "$wd/repro.syz" ] && syz='"repro.syz"'
+    lock
+    [ -z "$(find_id "$h")" ] || die 3 "hash already recorded as $(find_id "$h")"
+    n=$(( $(grep -c . "$FJ" 2>/dev/null || true) + 1 )); id=$(printf 'kf-%04d' "$n")
+    mkdir -p "$V/$id"; cp -a "$wd/." "$V/$id/"
+    rec=$(jq -c --arg id "$id" --arg h "$h" --arg ts "$(ts)" --arg b "kfuzz/verified/$id" '
+      del(.work_dir) + {schema:"kfinding/v1", id:$id, hash:$h, ts:$ts, bundle:$b,
+                        repro:{syz:$syz, c:"repro.c"}}' --argjson syz "$syz" "$f")
+    echo "$rec" | jq . > "$V/$id/meta.json"
+    printf '%s %s\n' "$(ts)" "$h" > "$V/$id/.verified"
+    echo "$rec" >> "$FJ"; echo "$id" ;;
+  drop|dup)
+    if [ "$cmd" = dup ]; then
+      [ $# -eq 2 ] || die 1 "usage: dup <hash> <id>"
+      h=$1; of=$(find_id "$2"); [ -n "$of" ] || die 3 "unknown finding: $2"; r=duplicate; note="dup of $of"
+    else
+      [ $# -ge 2 ] || die 1 "usage: drop <hash> <reason> [note]"
+      h=$1; r=$2; note=${3:-}; of=""; inlist "$r" $REASONS || die 2 "reason '$r' not in: $REASONS"
+    fi
+    lock
+    jq -cn --arg h "$h" --arg ts "$(ts)" --arg r "$r" --arg t "$(title_of "$h")" \
+          --argjson l "$(logs_of "$h")" --arg n "$note" --arg of "$of" '
+      {schema:"kdrop/v1", hash:$h, ts:$ts, reason:$r, title:$t, logs:$l, note:$n,
+       dup_of:(if $of=="" then null else $of end)}' >> "$DJ"
+    echo "dropped $h ($r)" ;;
+  annotate)
+    [ $# -eq 3 ] || die 1 "usage: annotate <id> <field> <value>"
+    id=$(find_id "$1"); [ -n "$id" ] || die 3 "unknown finding: $1"
+    inlist "$2" $FIELDS || die 2 "field '$2' not in: $FIELDS"
+    case $2 in
+      bisect_status) inlist "$3" ok failed skipped running || die 2 "bisect_status: ok failed skipped running" ;;
+      patch_status)  inlist "$3" draft validated failed sent || die 2 "patch_status: draft validated failed sent" ;;
+    esac
+    lock
+    jq -cn --arg id "$id" --arg ts "$(ts)" --arg f "$2" --arg v "$3" \
+      '{schema:"kannot/v1", id:$id, ts:$ts, field:$f, value:$v}' >> "$AJ"
+    echo "$id $2=$3" ;;
+  attach)
+    [ $# -ge 2 ] || die 1 "usage: attach <id> <file> [relpath]"
+    id=$(find_id "$1"); [ -n "$id" ] || die 3 "unknown finding: $1"
+    [ -f "$2" ] || die 2 "no such file: $2"
+    rel=${3:-$(basename "$2")}
+    case "/$rel/" in */../*|//*) die 2 "bad relpath: $rel" ;; esac
+    lock; mkdir -p "$(dirname "$V/$id/$rel")"; cp "$2" "$V/$id/$rel"; echo "$V/$id/$rel" ;;
+  get)
+    [ $# -eq 1 ] || die 1 "usage: get <id|hash>"
+    id=$(find_id "$1"); [ -n "$id" ] || die 3 "unknown finding: $1"
+    jq -c --arg id "$id" --slurpfile a <(cat "$AJ" 2>/dev/null || true) '
+      select(.id==$id) + ([ $a[] | select(.id==$id) | {(.field): .value} ] | add // {})' "$FJ" ;;
+  list)
+    [ -f "$FJ" ] && jq -r '[.id, .class, .subsystem, .title] | @tsv' "$FJ" || true ;;
+  count)
+    c=$(grep -c . "$FJ" 2>/dev/null) || true; echo "${c:-0}" ;;
+  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

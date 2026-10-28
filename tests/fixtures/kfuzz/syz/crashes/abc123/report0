@@ -1,0 +1,1 @@
+BUG: KASAN: use-after-free in foo+0x10/0x20

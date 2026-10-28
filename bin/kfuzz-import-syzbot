@@ -1,0 +1,33 @@
+#!/bin/bash
+# kfuzz-import-syzbot <extid|bug URL> -- import a syzbot bug as an untriaged crash.
+# Writes kfuzz/syz/crashes/syzbot-<extid>/ in syz-manager's crash-dir shape
+# (description, report0, repro.prog, repro.cprog) plus kernel.config and origin.json,
+# so the next kfuzz-update-current routes it to triage like a locally found crash.
+# Picks the first crash with both syz and C reproducers, else syz only, else C only.
+set -euo pipefail
+K=${KFUZZ_DIR:-$PWD/kfuzz}; BASE=${SYZBOT_URL:-https://syzkaller.appspot.com}
+arg=${1:?usage: kfuzz-import-syzbot <extid|https://syzkaller.appspot.com/bug?extid=...>}
+ext=${arg##*extid=}; ext=${ext%%&*}
+[[ $ext =~ ^[0-9a-f]{20}$ ]] || { echo "kfuzz-import-syzbot: not an extid: $ext" >&2; exit 2; }
+D=$K/syz/crashes/syzbot-$ext
+[ -d "$D" ] && { echo "present: $D"; exit 0; }
+get() { curl -fsS --max-time 30 "$BASE$1"; }
+j=$(get "/bug?extid=$ext&json=1") || { echo "kfuzz-import-syzbot: fetch failed" >&2; exit 1; }
+c=$(jq -c 'def has($k): (.[$k] // "") != "";
+  [.crashes[]?] | (map(select(has("syz-reproducer") and has("c-reproducer")))
+                   + map(select(has("syz-reproducer"))) + map(select(has("c-reproducer")))) | .[0] // empty' <<<"$j")
+[ -n "$c" ] || { echo "kfuzz-import-syzbot: $ext has no crash with a reproducer" >&2; exit 3; }
+tmp=$(mktemp -d "$K/.import.XXXXXX" 2>/dev/null || { mkdir -p "$K"; mktemp -d "$K/.import.XXXXXX"; })
+trap 'rm -rf "$tmp"' EXIT
+jq -r .title <<<"$j" > "$tmp/description"
+link() { jq -r --arg k "$1" '.[$k] // empty' <<<"$c"; }
+[ -n "$(link syz-reproducer)" ] && get "$(link syz-reproducer)" > "$tmp/repro.prog"
+[ -n "$(link crash-report-link)" ] && get "$(link crash-report-link)" > "$tmp/report0"
+[ -n "$(link c-reproducer)" ] && get "$(link c-reproducer)" > "$tmp/repro.cprog"
+[ -n "$(link kernel-config)" ] && get "$(link kernel-config)" > "$tmp/kernel.config"
+jq --arg ext "$ext" --arg url "$BASE/bug?extid=$ext" \
+  '{source:"syzbot", extid:$ext, url:$url, title:$j.title, status:$j.status} + $c' \
+  --argjson j "$j" --argjson c "$c" -n > "$tmp/origin.json"
+mkdir -p "$(dirname "$D")"; mv "$tmp" "$D"; trap - EXIT
+echo "imported $D"; ls "$D"
+jq -r '"kernel: \(."kernel-source-git") @ \(."kernel-source-commit")"' "$D/origin.json"

@@ -1,0 +1,35 @@
+rules:
+  - id: kernel-copy-from-user-unchecked
+    languages: [c]
+    severity: WARNING
+    message: >-
+      copy_from_user()/copy_to_user() return value ignored. On a partial copy the
+      destination holds uninitialized or stale bytes; return -EFAULT when it is non-zero.
+    pattern-either:
+      - pattern: copy_from_user($D, $S, $N);
+      - pattern: copy_to_user($D, $S, $N);
+      - pattern: __copy_from_user($D, $S, $N);
+      - pattern: __copy_to_user($D, $S, $N);
+    metadata: { cwe: "CWE-252", category: kernel-uaccess }
+
+  - id: kernel-get-put-user-unchecked
+    languages: [c]
+    severity: WARNING
+    message: get_user()/put_user() result ignored; a fault leaves the value unset.
+    pattern-either:
+      - pattern: get_user($X, $P);
+      - pattern: put_user($X, $P);
+    metadata: { cwe: "CWE-252", category: kernel-uaccess }
+
+  - id: kernel-double-fetch
+    languages: [c]
+    severity: INFO
+    message: >-
+      The same user pointer is copied twice. If the first copy validated a length or
+      type, the second copy can see a different value (double fetch, TOCTOU).
+    patterns:
+      - pattern: |
+          copy_from_user($A, $U, $N1);
+          ...
+          copy_from_user($B, $U, $N2);
+    metadata: { cwe: "CWE-367", category: kernel-uaccess }

@@ -1,0 +1,111 @@
+#!/bin/bash
+# kfuzz-update-current -- deterministic WARM-tick refresh of kfuzz/state/current.json (kstate/v1).
+# adapted from cc-fuzzer scripts/update-current.sh @ 478a126; see UPSTREAM.lock
+#
+# Sole writer of current.json and coverage.jsonl. Prints the recommendation as one JSON line.
+# Env: KFUZZ_DIR (default $PWD/kfuzz)  KFUZZ_KERNEL_OUT (default manager.cfg kernel_obj, else /work/out/syzkaller)
+#      KFUZZ_SYZKALLER (/opt/syzkaller)  KFUZZ_IMAGE (/work/image/rootfs.img)
+#      KFUZZ_PLATEAU_MIN (60)  KFUZZ_METRICS_FILE (read /metrics text from a file instead of HTTP; tests)
+set -euo pipefail
+K=${KFUZZ_DIR:-$PWD/kfuzz}; W=$K/syz; S=$K/state; mkdir -p "$S"
+CFG=$W/manager.cfg
+catq() { cat "$@" 2>/dev/null || true; }
+cfgval() { [ -f "$CFG" ] && jq -r "$1 // empty" "$CFG" 2>/dev/null || true; }
+
+# --- manager ---
+campaign=none; [ -f "$CFG" ] && campaign=stopped
+pid=$(cat "$W/manager.pid" 2>/dev/null || echo 0); [[ $pid =~ ^[0-9]+$ ]] || pid=0
+alive=false; [ "$pid" -gt 0 ] && kill -0 "$pid" 2>/dev/null && { alive=true; campaign=running; }
+http=$(cfgval .http); http=${http:-127.0.0.1:56741}
+
+# --- kernel and infra ---
+OUT=${KFUZZ_KERNEL_OUT:-$(cfgval .kernel_obj)}; OUT=${OUT:-/work/out/syzkaller}
+SYZ=${KFUZZ_SYZKALLER:-/opt/syzkaller}; IMG=${KFUZZ_IMAGE:-/work/image/rootfs.img}
+bz=false; [ -f "$OUT/arch/x86/boot/bzImage" ] && bz=true
+kcfg=$(ls "$K"/configs/*.config 2>/dev/null | head -1 || true)
+stale=false
+if [ -n "$kcfg" ] && [ -f "$OUT/.config" ]; then
+  cmp -s <(grep -v '^#' "$kcfg" | sort) <(grep -v '^#' "$OUT/.config" | sort) || stale=true
+fi
+missing=()
+[ -x "$SYZ/bin/syz-manager" ] || missing+=(syz-manager)
+[ -f "$IMG" ] || missing+=(rootfs-image)
+command -v kres-syz-up >/dev/null || missing+=(kres-syz-up)
+
+# --- coverage time series (only while alive) ---
+WIN=${KFUZZ_PLATEAU_MIN:-60}
+if [ "$alive" = true ]; then
+  if [ -n "${KFUZZ_METRICS_FILE:-}" ]; then m=$(cat "$KFUZZ_METRICS_FILE" 2>/dev/null || true)
+  else m=$(curl -s --max-time 3 "http://$http/metrics" 2>/dev/null || true); fi
+  cov=$(awk '$1=="syz_corpus_cover"{print int($2)}' <<<"$m")
+  crt=$(awk '$1=="syz_crash_total"{print int($2)}' <<<"$m")
+  [ -n "$cov" ] && jq -cn --argjson c "$cov" --argjson k "${crt:-0}" \
+    '{ts:(now|floor), cover:$c, crashes:$k}' >> "$S/coverage.jsonl"
+fi
+coverage=$(catq "$S/coverage.jsonl" | jq -sc --argjson win "$WIN" '
+  (now|floor) as $t | sort_by(.ts) as $s |
+  ([ $s[] | select(.ts <= $t - $win*60) ] | last) as $ref |
+  { cover: ($s|last|.cover // null), crashes_total: ($s|last|.crashes // null),
+    samples: ($s|length), window_min: $win,
+    plateau: ( $ref != null and ([ $s[] | select(.ts > $ref.ts) ] | length) > 0
+               and ([ $s[] | select(.ts > $ref.ts) | .cover ] | max) <= $ref.cover ) }')
+
+# --- crashes vs records ---
+FJ=$S/findings.jsonl; DJ=$S/dropped_crashes.jsonl; AJ=$S/annotations.jsonl
+seen=$(catq "$FJ" "$DJ" | jq -r '.hash // empty' | sort -u)
+found=$(catq "$FJ" | jq -r '.hash // empty' | sort -u)
+untriaged=(); retry=(); dirs=0
+for d in "$W"/crashes/*/; do
+  [ -d "$d" ] || continue; dirs=$((dirs+1)); h=$(basename "$d")
+  if ! grep -qxF "$h" <<<"$seen"; then untriaged+=("$h"); continue; fi
+  grep -qxF "$h" <<<"$found" && continue
+  last=$(catq "$DJ" | jq -c --arg h "$h" 'select(.hash==$h)' | tail -1)
+  if [ -n "$last" ] && [ "$(jq -r .reason <<<"$last")" = no_repro ]; then
+    was=$(jq -r '.logs // 0' <<<"$last"); now=$(ls "$d" | grep -c '^log' || true)
+    [ "$now" -ge $((was+3)) ] && retry+=("$h")
+  fi
+done
+nfind=$(grep -c . "$FJ" 2>/dev/null || true); nfind=${nfind:-0}
+pending_bisect=$(catq "$FJ" | jq -sc --slurpfile a <(catq "$AJ") '
+  [ .[].id ] - [ $a[] | select(.field=="bisect_status") | .id ] ')
+
+# --- decide (first match wins; see schema/kstate-v1.md) ---
+target=""
+if [ "$alive" != true ] && { [ "$bz" != true ] || [ "$stale" = true ]; }; then
+  br=rebuild_kernel; why=$([ "$bz" = true ] && echo "kernel config differs from $kcfg" || echo "no bzImage in $OUT")
+elif [ "$alive" != true ] && [ ${#missing[@]} -gt 0 ]; then
+  br=fix_infra; why="missing: ${missing[*]}"
+elif [ "$alive" != true ]; then
+  br=restart_manager; why=$([ $campaign = none ] && echo "no campaign launched" || echo "syz-manager not running (pid $pid)")
+elif [ ${#untriaged[@]} -gt 0 ]; then
+  br=triage; target=${untriaged[0]}; why="${#untriaged[@]} untriaged crash(es)"
+elif [ ${#retry[@]} -gt 0 ]; then
+  br=repro; target=${retry[0]}; why="${#retry[@]} no_repro crash(es) recurred since drop"
+elif [ "$(jq length <<<"$pending_bisect")" -gt 0 ]; then
+  br=bisect; target=$(jq -r '.[0]' <<<"$pending_bisect"); why="$(jq length <<<"$pending_bisect") finding(s) without bisect status"
+elif [ "$(jq -r .plateau <<<"$coverage")" = true ]; then
+  br=refocus; why="syz_corpus_cover flat for ${WIN} min"
+else
+  br=sleep; why="manager alive, nothing to do"
+fi
+
+arr() { if [ $# -eq 0 ]; then echo '[]'; else jq -cn '$ARGS.positional' --args "$@"; fi; }
+tmp=$(mktemp "$S/.current.XXXXXX")
+jq -n --arg br "$br" --arg why "$why" --arg target "$target" --arg campaign "$campaign" \
+      --argjson alive "$alive" --argjson pid "$pid" --arg http "$http" \
+      --arg out "$OUT" --argjson bz "$bz" --argjson stale "$stale" \
+      --arg kcfg "$(basename "${kcfg:-}")" --argjson missing "$(arr "${missing[@]+"${missing[@]}"}")" \
+      --argjson coverage "$coverage" --argjson dirs "$dirs" \
+      --argjson untriaged "$(arr "${untriaged[@]+"${untriaged[@]}"}")" \
+      --argjson retry "$(arr "${retry[@]+"${retry[@]}"}")" \
+      --argjson nfind "$nfind" --argjson pb "$pending_bisect" '
+  {schema:"kstate/v1", engine:"syzkaller", updated:(now|todate), campaign:$campaign,
+   manager:{pid:$pid, alive:$alive, http:$http},
+   kernel:{out:$out, bzimage:$bz, config_stale:$stale}, config:$kcfg,
+   infra:{syz_manager:($missing|index("syz-manager")==null), image:($missing|index("rootfs-image")==null), missing:$missing},
+   coverage:$coverage,
+   crashes:{dirs:$dirs, untriaged:$untriaged, retry_repro:$retry},
+   findings:{count:$nfind, pending_bisect:$pb},
+   recommendation:({branch:$br, reason:$why} + (if $target=="" then {} else {target:$target} end))}' > "$tmp"
+mv "$tmp" "$S/current.json"
+jq -c .recommendation "$S/current.json"
