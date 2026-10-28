@@ -34,4 +34,4 @@ Redirect a stalled specialist with `SendMessage` first; re-dispatch with a fresh
 
 ## Hosted cloud VM
 
-The VM pauses when idle, so long self-chained ticks do not survive there. Tick by hand or with `/loop`; keep `/cc-kfuzz:kfuzz-yolo` for the KVM runner.
+The VM pauses when idle, so long self-chained ticks do not survive there. Tick by hand or with `/loop`. `/cc-kfuzz:kfuzz-yolo on --allow-tcg` works there too while the session stays active.

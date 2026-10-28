@@ -18,14 +18,14 @@ You bisect ONE finding (args: `id=<kf-id> [mode=cause|fix] [good=<ref>] [bad=<re
 ## Test step (`kfuzz/work/bisect-<id>/test.sh`, used by `git bisect run`)
 
 1. `make olddefconfig` with the finding's config, build bzImage; build failure → exit 125 (skip).
-2. Boot with `vng`, run `repro` (static, from the bundle's `repro.c`) three times with a timeout.
+2. Boot with `kfuzz-vng --timeout 300 -r <bzImage> --user root -- "timeout $((120*$(kfuzz-host timeout_mult))) ./repro"` and run `repro` (static, from the bundle's `repro.c`) three times.
 3. Crash with the same class and top frame → exit 1 (bad); clean → exit 0 (good); boot failure → exit 125.
 
 ## Steps
 
 1. **Gate:** run the test at `bad` (default: the finding's `kernel_ref`) and confirm it is bad. If not, `bisect_status failed`, reason "does not reproduce at reported commit".
 2. Pick `good`: the last release tag before `bad` that tests good (try up to three older tags).
-3. `git bisect start <bad> <good> && git bisect run kfuzz/work/bisect-<id>/test.sh` (detached, log to `bisect.log`). Without KVM each step can take 20+ minutes; cap at 20 steps.
+3. `git bisect start <bad> <good> && git bisect run kfuzz/work/bisect-<id>/test.sh` (detached, log to `bisect.log`). Cap at 20 steps. Under TCG (`kfuzz-host accel`) a step is a build plus three slow boots, roughly 20-40 minutes: state the estimate (steps ≈ log2 of the commit range) up front, and prefer `kres-nix kernel` builds for refs you will test more than once.
 4. Confirm the result: the culprit tests bad, its parent tests good. Otherwise `failed`.
 5. `kfuzz-findings attach <id> kfuzz/work/bisect-<id>/bisect.log`, `kfuzz-findings annotate <id> cause_commit <sha>` (or `fix_commit` in fix mode), then `bisect_status ok`.
 6. `git bisect reset` always, even on failure.

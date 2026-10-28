@@ -1,7 +1,8 @@
 #!/bin/bash
 # kfuzz-yolo-state -- sole writer of kfuzz/state/budget.json (YOLO block).
 # Mirrors cc-fuzzer scripts/yolo-state.sh: the hard caps live here, not in a prompt.
-#   kfuzz-yolo-state on [--interval SEC] [--max-ticks N]   enable (defaults 1800, 48)
+#   kfuzz-yolo-state on [--interval SEC] [--max-ticks N] [--allow-tcg]   enable (defaults 1800, 48)
+#                              under TCG (kfuzz-host) refuses without --allow-tcg; interval >= min_interval
 #   kfuzz-yolo-state off [--reason TEXT]
 #   kfuzz-yolo-state status
 #   kfuzz-yolo-state next      count one tick and print the YOLO_NEXT line for a
@@ -13,14 +14,19 @@ put() { local t; t=$(mktemp "$S/.budget.XXXXXX"); jq "$@" "$B" > "$t" && mv "$t"
 cmd=${1:-status}; shift || true
 case $cmd in
   on)
-    iv=1800; mx=48
+    iv=1800; mx=48; tcg_ok=0
     while [ $# -gt 0 ]; do case $1 in
-      --interval) iv=$2; shift 2 ;; --max-ticks) mx=$2; shift 2 ;;
+      --interval) iv=$2; shift 2 ;; --max-ticks) mx=$2; shift 2 ;; --allow-tcg) tcg_ok=1; shift ;;
       *) echo "unknown flag $1" >&2; exit 1 ;; esac; done
     [[ $iv =~ ^[0-9]+$ && $mx =~ ^[0-9]+$ ]] || { echo "interval and max-ticks are integers" >&2; exit 1; }
+    H=$("$(dirname "$(readlink -f "$0")")/kfuzz-host"); acc=$(jq -r .accel <<<"$H")
+    if [ "$acc" = tcg ]; then
+      [ $tcg_ok = 1 ] || { echo "kfuzz-yolo-state: no KVM (TCG, ~10x slower); re-run with --allow-tcg to enable anyway" >&2; exit 3; }
+      mi=$(jq -r .min_interval <<<"$H"); [ "$iv" -lt "$mi" ] && iv=$mi
+    fi
     [ "$iv" -lt 60 ] && iv=60; [ "$iv" -gt 3600 ] && iv=3600
-    put --argjson iv "$iv" --argjson mx "$mx" \
-      '.yolo={enabled:true, interval:$iv, max_ticks:$mx, ticks:0, started:(now|todate)}'
+    put --argjson iv "$iv" --argjson mx "$mx" --arg acc "$acc" \
+      '.yolo={enabled:true, interval:$iv, max_ticks:$mx, ticks:0, accel:$acc, started:(now|todate)}'
     jq -c .yolo "$B" ;;
   off)
     r=manual; [ "${1:-}" = --reason ] && r=${2:-manual}

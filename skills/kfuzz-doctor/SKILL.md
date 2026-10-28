@@ -9,9 +9,10 @@ Read-only. Run each check and report a table of check, result, fix.
 
 1. `kfuzz-ccf` and `kfuzz-compat`: cc-fuzzer found, surface OK. On `MISSING`/`PATTERN GONE`/`NAME`, cc-kfuzz is incompatible with the installed cc-fuzzer: name the lock line and the fix (pin `CC_FUZZER_REF` to `tested_ref` in the setup script, or update cc-kfuzz). `NOTE` lines are informational.
 2. `bash "$(kfuzz-ccf scripts/integrity-check.sh)"`: cc-fuzzer files unmodified.
-3. `kres-doctor`: toolchain, `kvm=`, `/work/linux`, syz-manager, rootfs image, `CLAUDE_CODE_PLUGIN_DIRS`, nix.
-4. `echo "$CLAUDE_CODE_PLUGIN_DIRS"` lists both plugin dirs (cloud) or the session was started with two `--plugin-dir` flags.
-5. If `kfuzz/` exists: `kfuzz-update-current`, then check that every `kfuzz/verified/<id>/` has `.verified` and `meta.json` and a matching line in `kfuzz/state/findings.jsonl` (and the reverse), and that every `*.jsonl` line parses (`jq -c . <file> >/dev/null`).
-6. Stale manager: `manager.pid` present but process dead while `campaign` is `stopped` is normal; report it only if the operator expects it running.
+3. `kres-doctor`: toolchain, `/work/linux`, syz-manager, rootfs image, `CLAUDE_CODE_PLUGIN_DIRS`, nix.
+4. `kfuzz-host`: acceleration mode. `tcg` is a supported mode, not a failure: report it as OK (slow) with its VM count and timeout multiplier. Only `KFUZZ_ACCEL=kvm` without a usable `/dev/kvm` is a FAIL.
+5. `echo "$CLAUDE_CODE_PLUGIN_DIRS"` lists both plugin dirs (cloud) or the session was started with two `--plugin-dir` flags.
+6. If `kfuzz/` exists: `kfuzz-update-current`, then check that every `kfuzz/verified/<id>/` has `.verified` and `meta.json` and a matching line in `kfuzz/state/findings.jsonl` (and the reverse), and that every `*.jsonl` line parses (`jq -c . <file> >/dev/null`).
+7. Stale manager: `manager.pid` present but process dead while `campaign` is `stopped` is normal; report it only if the operator expects it running.
 
 Never modify anything; suggest commands instead.

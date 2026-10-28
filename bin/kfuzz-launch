@@ -6,6 +6,7 @@
 #   kfuzz-launch focus <a,b,...>  set enable_syscalls for the next start (sole writer of state/focus.json)
 #   kfuzz-launch focus --clear    fuzz all syscalls
 # Env: KFUZZ_DIR (default $PWD/kfuzz)  KFUZZ_KERNEL_OUT (/work/out/syzkaller)  KFUZZ_IMAGE_DIR (/work/image)
+#      KFUZZ_ACCEL (auto|kvm|tcg; VM count and procs come from kfuzz-host, KRES_VMS/KRES_PROCS override)
 set -euo pipefail
 K=${KFUZZ_DIR:-$PWD/kfuzz}; W=$K/syz; S=$K/state
 OUT=${KFUZZ_KERNEL_OUT:-/work/out/syzkaller}; IMGD=${KFUZZ_IMAGE_DIR:-/work/image}
@@ -20,7 +21,10 @@ case ${1:-} in
     [ -f "$OUT/.config" ] || { echo "kfuzz-launch: no $OUT/.config; run kres-config syzkaller"; exit 1; }
     sc=$(jq -r '(.enable_syscalls // []) | join(",")' "$S/focus.json" 2>/dev/null || true)
     cp "$OUT/.config" "$K/configs/$(basename "$OUT").config"
-    KRES_SYSCALLS="$sc" kres-syz-up "$OUT" "$IMGD" "$W"
+    H=$("$(dirname "$(readlink -f "$0")")/kfuzz-host")
+    [ "$(jq -r .accel <<<"$H")" = tcg ] && echo "kfuzz-launch: TCG mode (no KVM): $(jq -r .vms <<<"$H") VM(s), syzkaller slowdown x10"
+    KRES_SYSCALLS="$sc" KRES_VMS=${KRES_VMS:-$(jq -r .vms <<<"$H")} KRES_PROCS=${KRES_PROCS:-$(jq -r .procs <<<"$H")} \
+      KRES_ACCEL=$(jq -r .accel <<<"$H") kres-syz-up "$OUT" "$IMGD" "$W"
     ;;
   stop)
     p=$(pid); alive || { echo "kfuzz-launch: not running"; exit 0; }

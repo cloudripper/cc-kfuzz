@@ -52,7 +52,7 @@ In cc-kfuzz, `run script=` names a bare command on PATH (a cc-kfuzz `bin/` scrip
 
 - One decision per invocation. Never chain two actions in one reply.
 - Never paste `current.json` into a directive's `args`; pass ids and hashes only.
-- Without `/dev/kvm` (`kres-doctor` shows `kvm=NO`), prefer `triage`/`bisect` on imported syzbot bugs over long fuzzing; never schedule below 1800 s.
+- Read `host` in current.json. Under `host.accel == "tcg"` (no KVM, or `KFUZZ_ACCEL=tcg`) every branch is still allowed and runs about 10x slower: never schedule below `host.min_interval`; on `refocus` prefer narrowing `enable_syscalls` over `describe_syscalls`; drops made under TCG are retried automatically when the same campaign later runs on KVM (`crashes.retry_repro`).
 - If `kfuzz-update-current` fails, emit `halt` with its stderr.
 
 ## Output

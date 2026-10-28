@@ -62,8 +62,9 @@ case $cmd in
     fi
     lock
     jq -cn --arg h "$h" --arg ts "$(ts)" --arg r "$r" --arg t "$(title_of "$h")" \
-          --argjson l "$(logs_of "$h")" --arg n "$note" --arg of "$of" '
-      {schema:"kdrop/v1", hash:$h, ts:$ts, reason:$r, title:$t, logs:$l, note:$n,
+          --argjson l "$(logs_of "$h")" --arg n "$note" --arg of "$of" \
+          --arg acc "$("$(dirname "$(readlink -f "$0")")/kfuzz-host" accel 2>/dev/null || echo unknown)" '
+      {schema:"kdrop/v1", hash:$h, ts:$ts, reason:$r, title:$t, logs:$l, note:$n, accel:$acc,
        dup_of:(if $of=="" then null else $of end)}' >> "$DJ"
     echo "dropped $h ($r)" ;;
   annotate)

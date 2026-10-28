@@ -1,0 +1,38 @@
+#!/bin/bash
+# kfuzz-host [field] -- how this host runs kernels: KVM or TCG (software emulation).
+# The one place cc-kfuzz decides acceleration; scripts and agents read it, never /dev/kvm directly.
+#   KFUZZ_ACCEL=auto (default) | kvm | tcg     tcg forces emulation even with KVM present
+#   KFUZZ_KVM_DEV (default /dev/kvm)           device probed for KVM (tests point it at a file)
+# Prints JSON; with a field name (e.g. accel, timeout_mult) prints that value only.
+#   accel          kvm | tcg
+#   slowdown       syzkaller's own factor for this accel (10 under TCG, set by mgrconfig)
+#   timeout_mult   multiply wall-clock timeouts (VM boots, repro runs, bisect steps) by this
+#   vms procs      syz-manager VM count and executor procs per VM
+#   vm_cpus vm_mem guest size (cpus, MiB)
+#   vng_flags      extra flags for vng (kfuzz-vng adds them)
+#   plateau_min    coverage-flat window before refocus, minutes
+#   min_interval   shortest YOLO tick interval, seconds
+set -euo pipefail
+cpus=$(nproc); mem=$(awk '/MemTotal/{print int($2/1048576)}' /proc/meminfo)
+kvm=false; [ -w "${KFUZZ_KVM_DEV:-/dev/kvm}" ] && kvm=true
+want=${KFUZZ_ACCEL:-auto}
+case $want in
+  auto) accel=$([ $kvm = true ] && echo kvm || echo tcg) ;;
+  kvm)  [ $kvm = true ] || { echo "kfuzz-host: KFUZZ_ACCEL=kvm but ${KFUZZ_KVM_DEV:-/dev/kvm} is not usable" >&2; exit 1; }; accel=kvm ;;
+  tcg)  accel=tcg ;;
+  *)    echo "kfuzz-host: KFUZZ_ACCEL must be auto|kvm|tcg" >&2; exit 2 ;;
+esac
+if [ $accel = kvm ]; then
+  vms=$(( cpus / 2 > 1 ? cpus / 2 : 1 )); [ $vms -gt 8 ] && vms=8
+  j=$(jq -n --argjson v "$vms" '{slowdown:1, timeout_mult:1, vms:$v, procs:4, vm_cpus:2, vm_mem:2048,
+        vng_flags:"", plateau_min:60, min_interval:300}')
+else
+  # TCG: each guest vCPU is a host thread; leave a core for the manager and builds.
+  vms=$(( (cpus - 1) / 2 )); [ $vms -lt 1 ] && vms=1; [ $vms -gt 4 ] && vms=4
+  flags=""; [ $kvm = true ] && flags="--disable-kvm"
+  j=$(jq -n --argjson v "$vms" --arg f "$flags" '{slowdown:10, timeout_mult:10, vms:$v, procs:2, vm_cpus:2,
+        vm_mem:2048, vng_flags:$f, plateau_min:240, min_interval:1800}')
+fi
+out=$(jq -c --arg a "$accel" --arg w "$want" --argjson k "$kvm" --argjson c "$cpus" --argjson m "$mem" \
+  '{accel:$a, requested:$w, kvm_present:$k, host_cpus:$c, host_mem_gb:$m} + .' <<<"$j")
+if [ $# -gt 0 ]; then jq -r --arg f "$1" '.[$f] // empty' <<<"$out"; else echo "$out"; fi

@@ -16,7 +16,7 @@ Work in `/work/linux` on branch `kfuzz/<id>`; logs in `kfuzz/work/validate-<id>/
 2. **sparse:** for each touched `.c`, `make O=<out> C=2 <dir>/<file>.o` with no new warnings versus the same command on the parent commit.
 3. **coccinelle:** `make O=<out> coccicheck MODE=report M=<touched dir>`: no new reports versus parent.
 4. **build:** `kres-build -d <out>` with the finding's config; poll `build.status`; must be `ok`. Also `make O=<out> W=1 <dir>/<file>.o` without new warnings.
-5. **reproducer:** boot the patched kernel with `vng`, run the bundle's static `repro` five times with a timeout. Zero occurrences of the original title or top frame. Then boot the unpatched parent once and confirm it still fires (proves the test is live).
+5. **reproducer:** boot the patched kernel with `kfuzz-vng --timeout 300 -r <bzImage> --user root -- "timeout $((120*$(kfuzz-host timeout_mult))) ./repro"` five times. Zero occurrences of the original title or top frame. Then boot the unpatched parent once and confirm it still fires (proves the test is live).
 
 ## Record
 

@@ -31,7 +31,11 @@ Both plugins show as `@inline` in `/plugin`. Run `/cc-kfuzz:kfuzz-doctor` first.
 | `/cc-kfuzz:kfuzz-status` | Manager, coverage, crashes, findings; no agent |
 | `/cc-kfuzz:kfuzz-bisect <id>` | Cause/fix commit, gated on the reproducer flipping |
 | `/cc-kfuzz:kfuzz-patch <id>` | Draft fix plus checkpatch/sparse/coccicheck/build/repro gates |
-| `/cc-kfuzz:kfuzz-yolo on` | Self-driving ticks with hard caps (KVM runner) |
+| `/cc-kfuzz:kfuzz-yolo on [--allow-tcg]` | Self-driving ticks with hard caps |
+
+### Without KVM
+
+Everything runs without `/dev/kvm`, under QEMU TCG emulation, about 10x slower. `kfuzz-host` detects the mode (force it with `KFUZZ_ACCEL=tcg`, or require KVM with `KFUZZ_ACCEL=kvm`) and every script and agent follows it: syz-manager gets fewer VMs and procs and scales its own timeouts, `kfuzz-vng --timeout` scales VM timeouts, the coverage plateau window is 4 h instead of 1 h, the planner keeps the syscall focus narrow, and YOLO needs `--allow-tcg`. Drops made under TCG record `accel: tcg`; when the same campaign later runs on a KVM host, timing-sensitive drops go back to the `repro` branch automatically. On the hosted VM, syz-manager only runs while the session is active.
 
 Reused from cc-fuzzer unchanged: `/cc-fuzzer:fuzz-review --target-root /work/linux/<dir> --sast-rules <cc-kfuzz>/rules/semgrep/kernel`, `/cc-fuzzer:delta-sweep`, `cc-fuzzer:planner-consult`, `cc-fuzzer:ops-runner`. Full map: [docs/ccf-inventory.md](docs/ccf-inventory.md).
 
@@ -50,6 +54,8 @@ bin/                         on PATH while the plugin is enabled
   kfuzz-launch               syz-manager start|stop|status|focus
   kfuzz-import-syzbot        syzbot bug -> kfuzz/syz/crashes/syzbot-<extid>/
   kfuzz-yolo-state           sole writer of kfuzz/state/budget.json
+  kfuzz-host                 KVM or TCG, and the VM/timeout numbers for it
+  kfuzz-vng                  vng with this host's flags and scaled timeouts
 hooks/                       SessionStart drift report; kfuzz/verified/ write gate
 schema/kstate-v1.md          state layout, current.json, branches, record schemas
 rules/semgrep/kernel/        kernel semgrep rules for cc-fuzzer's review tier

@@ -5,6 +5,7 @@
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd); PATH=$ROOT/bin:$PATH
 T=$(mktemp -d); trap 'kill $LIVE 2>/dev/null; rm -rf "$T"' EXIT
+export KFUZZ_KVM_DEV=$T/no-kvm KFUZZ_ACCEL=auto   # start as a host without KVM (TCG)
 export KFUZZ_DIR=$T/kfuzz KFUZZ_KERNEL_OUT=$T/out KFUZZ_SYZKALLER=$T/syzkaller KFUZZ_IMAGE=$T/image/rootfs.img
 cp -a "$ROOT/tests/fixtures/kfuzz" "$KFUZZ_DIR"
 pass=0; fail=0
@@ -64,8 +65,34 @@ expect "all done" sleep
 
 # 6. plateau: a sample older than the window with the same cover
 jq -cn '{ts:((now|floor)-7200), cover:100, crashes:1}' > "$KFUZZ_DIR/state/coverage.jsonl"
-expect "flat 2h" refocus
+expect "flat 2h, TCG window 240m" sleep
+KFUZZ_PLATEAU_MIN=60 expect "flat 2h, 60m window" refocus
+jq -cn '{ts:((now|floor)-5*3600), cover:100, crashes:1}' > "$KFUZZ_DIR/state/coverage.jsonl"
+expect "flat 5h under TCG" refocus
 printf 'syz_corpus_cover 150\n' > "$KFUZZ_METRICS_FILE"; expect "cover grew" sleep
+
+# 6b. acceleration: kfuzz-host, kfuzz-vng, current.json host block, YOLO gate, KVM retry of TCG drops
+[ "$(kfuzz-host accel)" = tcg ] && [ "$(kfuzz-host timeout_mult)" = 10 ] && ok "host: tcg without KVM" || bad "host tcg"
+KFUZZ_ACCEL=kvm kfuzz-host >/dev/null 2>&1 && bad "host: forced kvm without device" || ok "host: forced kvm refused"
+touch "$T/kvm"
+[ "$(KFUZZ_KVM_DEV=$T/kvm kfuzz-host accel)" = kvm ] && ok "host: kvm detected" || bad "host kvm"
+[ "$(KFUZZ_KVM_DEV=$T/kvm KFUZZ_ACCEL=tcg kfuzz-host vng_flags)" = --disable-kvm ] && ok "host: forced tcg disables kvm in vng" || bad "host forced tcg"
+v=$(KFUZZ_VNG_DRYRUN=1 kfuzz-vng --timeout 120 -r bz -- ./repro 2>/dev/null)
+[[ $v == "timeout --foreground -k 30 1200 vng -r bz -- ./repro "* ]] && ok "vng: timeout x10 under tcg" || bad "vng tcg" "$v"
+v=$(KFUZZ_KVM_DEV=$T/kvm KFUZZ_VNG_DRYRUN=1 kfuzz-vng --timeout 120 -r bz -- ./repro 2>/dev/null)
+[[ $v == "timeout --foreground -k 30 120 vng -r bz "* ]] && ok "vng: timeout x1 under kvm" || bad "vng kvm" "$v"
+kfuzz-update-current >/dev/null; jq -e '.host.accel=="tcg"' "$KFUZZ_DIR/state/current.json" >/dev/null && ok "current.json host block" || bad "host block"
+kfuzz-yolo-state on >/dev/null 2>&1; [ $? = 3 ] && ok "yolo: refused under tcg" || bad "yolo refuse"
+[ "$(kfuzz-yolo-state on --interval 300 --allow-tcg | jq -r .interval)" = 1800 ] && ok "yolo: --allow-tcg, interval raised" || bad "yolo allow"
+kfuzz-yolo-state off >/dev/null
+mkdir -p "$KFUZZ_DIR/syz/crashes/def456"; echo "WARNING in bar" > "$KFUZZ_DIR/syz/crashes/def456/description"
+kfuzz-findings drop def456 flaky "never fired" >/dev/null
+[ "$(tail -1 "$KFUZZ_DIR/state/dropped_crashes.jsonl" | jq -r .accel)" = tcg ] && ok "drop records accel" || bad "drop accel"
+[ "$(kfuzz-update-current | jq -r .branch)" != repro ] && ok "tcg drop not retried on tcg" || bad "tcg retry on tcg"
+r=$(KFUZZ_KVM_DEV=$T/kvm kfuzz-update-current); [ "$(jq -r .branch <<<"$r")/$(jq -r .target <<<"$r")" = repro/def456 ] \
+  && ok "tcg drop retried on kvm" || bad "tcg drop retried on kvm" "$r"
+KFUZZ_KVM_DEV=$T/kvm kfuzz-findings drop def456 flaky "kvm too" >/dev/null
+[ "$(KFUZZ_KVM_DEV=$T/kvm kfuzz-update-current | jq -r .branch)" != repro ] && ok "kvm drop not retried" || bad "kvm drop retried"
 
 # 7. gate
 g() { jq -cn --arg t "$1" --arg k "$2" --arg v "$3" '{tool_name:$t, tool_input:{($k):$v}}' | "$ROOT/hooks/gate-verified.sh"; }

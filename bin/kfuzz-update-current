@@ -5,7 +5,8 @@
 # Sole writer of current.json and coverage.jsonl. Prints the recommendation as one JSON line.
 # Env: KFUZZ_DIR (default $PWD/kfuzz)  KFUZZ_KERNEL_OUT (default manager.cfg kernel_obj, else /work/out/syzkaller)
 #      KFUZZ_SYZKALLER (/opt/syzkaller)  KFUZZ_IMAGE (/work/image/rootfs.img)
-#      KFUZZ_PLATEAU_MIN (60)  KFUZZ_METRICS_FILE (read /metrics text from a file instead of HTTP; tests)
+#      KFUZZ_PLATEAU_MIN (kfuzz-host plateau_min: 60 KVM, 240 TCG)  KFUZZ_ACCEL (auto|kvm|tcg)
+#       KFUZZ_METRICS_FILE (read /metrics text from a file instead of HTTP; tests)
 set -euo pipefail
 K=${KFUZZ_DIR:-$PWD/kfuzz}; W=$K/syz; S=$K/state; mkdir -p "$S"
 CFG=$W/manager.cfg
@@ -33,7 +34,8 @@ missing=()
 command -v kres-syz-up >/dev/null || missing+=(kres-syz-up)
 
 # --- coverage time series (only while alive) ---
-WIN=${KFUZZ_PLATEAU_MIN:-60}
+HOST=$("$(dirname "$(readlink -f "$0")")/kfuzz-host")
+WIN=${KFUZZ_PLATEAU_MIN:-$(jq -r .plateau_min <<<"$HOST")}
 if [ "$alive" = true ]; then
   if [ -n "${KFUZZ_METRICS_FILE:-}" ]; then m=$(cat "$KFUZZ_METRICS_FILE" 2>/dev/null || true)
   else m=$(curl -s --max-time 3 "http://$http/metrics" 2>/dev/null || true); fi
@@ -60,6 +62,11 @@ for d in "$W"/crashes/*/; do
   if ! grep -qxF "$h" <<<"$seen"; then untriaged+=("$h"); continue; fi
   grep -qxF "$h" <<<"$found" && continue
   last=$(catq "$DJ" | jq -c --arg h "$h" 'select(.hash==$h)' | tail -1)
+  # a drop made under TCG for a timing reason gets one more try once this host has KVM
+  if [ -n "$last" ] && [ "$(jq -r .accel <<<"$HOST")" = kvm ] && [ "$(jq -r '.accel // ""' <<<"$last")" = tcg ] \
+     && [[ " flaky harness_artifact no_repro " == *" $(jq -r .reason <<<"$last") "* ]]; then
+    retry+=("$h"); continue
+  fi
   if [ -n "$last" ] && [ "$(jq -r .reason <<<"$last")" = no_repro ]; then
     was=$(jq -r '.logs // 0' <<<"$last"); now=$(ls "$d" | grep -c '^log' || true)
     [ "$now" -ge $((was+3)) ] && retry+=("$h")
@@ -98,8 +105,8 @@ jq -n --arg br "$br" --arg why "$why" --arg target "$target" --arg campaign "$ca
       --argjson coverage "$coverage" --argjson dirs "$dirs" \
       --argjson untriaged "$(arr "${untriaged[@]+"${untriaged[@]}"}")" \
       --argjson retry "$(arr "${retry[@]+"${retry[@]}"}")" \
-      --argjson nfind "$nfind" --argjson pb "$pending_bisect" '
-  {schema:"kstate/v1", engine:"syzkaller", updated:(now|todate), campaign:$campaign,
+      --argjson nfind "$nfind" --argjson pb "$pending_bisect" --argjson host "$HOST" '
+  {schema:"kstate/v1", engine:"syzkaller", updated:(now|todate), campaign:$campaign, host:$host,
    manager:{pid:$pid, alive:$alive, http:$http},
    kernel:{out:$out, bzimage:$bz, config_stale:$stale}, config:$kcfg,
    infra:{syz_manager:($missing|index("syz-manager")==null), image:($missing|index("rootfs-image")==null), missing:$missing},

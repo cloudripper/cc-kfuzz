@@ -35,6 +35,8 @@ Why `verified/` and not `findings/`: cc-fuzzer's PreToolUse gate (`gate-findings
   "engine": "syzkaller",
   "updated": "2026-10-28T17:00:00Z",
   "campaign": "none | stopped | running",
+  "host": { "accel": "kvm | tcg", "requested": "auto", "kvm_present": false, "timeout_mult": 10,
+            "slowdown": 10, "vms": 1, "procs": 2, "plateau_min": 240, "min_interval": 1800, "...": "see kfuzz-host" },
   "manager": { "pid": 1234, "alive": true, "http": "127.0.0.1:56741" },
   "kernel": { "out": "/work/out/syzkaller", "bzimage": true, "config_stale": false },
   "config": "syzkaller.config",
@@ -46,6 +48,8 @@ Why `verified/` and not `findings/`: cc-fuzzer's PreToolUse gate (`gate-findings
 }
 ```
 
+`host` is `kfuzz-host` verbatim: the one place acceleration is decided. Without a usable `/dev/kvm`, or with `KFUZZ_ACCEL=tcg`, everything runs under QEMU TCG: syzkaller scales its own timeouts x10 (`-accel tcg` in `qemu_args`), `kfuzz-vng --timeout` scales VM timeouts by `timeout_mult`, the plateau window grows to `plateau_min`, and YOLO needs `--allow-tcg` and ticks no faster than `min_interval`.
+
 `recommendation.branch` is the deterministic default; the orchestrator may override it with a stated reason.
 
 | Branch | Fires when (first match wins) | Default action |
@@ -54,7 +58,7 @@ Why `verified/` and not `findings/`: cc-fuzzer's PreToolUse gate (`gate-findings
 | `fix_infra` | manager down and syz-manager binary, rootfs image, or `kres-syz-up` missing | report what is missing; stop |
 | `restart_manager` | manager down, prerequisites present (also: no campaign yet) | `kfuzz-launch start` |
 | `triage` | a `syz/crashes/<hash>/` with no record in findings.jsonl or dropped_crashes.jsonl | `kcrash-triager` on `target` |
-| `repro` | a hash dropped `no_repro` whose `log*` count grew by >= 3 since the drop | `kcrash-triager` retry on `target` |
+| `repro` | a hash dropped `no_repro` whose `log*` count grew by >= 3 since the drop, or (on a KVM host) a hash dropped `flaky`/`harness_artifact`/`no_repro` under TCG | `kcrash-triager` retry on `target` |
 | `bisect` | a finding with no `bisect_status` annotation | `kbisector` on `target` |
 | `refocus` | `/metrics` `syz_corpus_cover` flat for `window_min` minutes | `kcov-analyst`, then `kconfig-planner` (refocus) or `syzlang-writer` (`describe_syscalls`) |
 | `sleep` | manager alive, nothing above | schedule next tick |
@@ -74,7 +78,7 @@ Why `verified/` and not `findings/`: cc-fuzzer's PreToolUse gate (`gate-findings
 ## dropped_crashes.jsonl
 
 ```json
-{"schema":"kdrop/v1","hash":"...","ts":"...","reason":"no_repro","title":"...","logs":4,"note":"...","dup_of":null}
+{"schema":"kdrop/v1","hash":"...","ts":"...","reason":"no_repro","title":"...","logs":4,"note":"...","accel":"tcg","dup_of":null}
 ```
 
 `reason` ∈ infra no_repro harness_artifact duplicate not_kernel flaky other. The newest record per hash wins.

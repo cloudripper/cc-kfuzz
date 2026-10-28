@@ -1,0 +1,20 @@
+#!/bin/bash
+# kfuzz-vng [--timeout SEC] [vng args...] -- run vng with this host's acceleration.
+# Adds kfuzz-host's vng_flags (--disable-kvm when KFUZZ_ACCEL=tcg on a KVM host) and,
+# with --timeout, wraps the whole boot+command in `timeout SEC*timeout_mult`, so one
+# number in an agent prompt means the same thing under KVM and TCG.
+# KFUZZ_VNG_DRYRUN=1 prints the command instead of running it (tests).
+set -euo pipefail
+HERE=$(dirname "$(readlink -f "$0")")
+h=$("$HERE/kfuzz-host")
+t=""
+if [ "${1:-}" = --timeout ]; then
+  [[ ${2:-} =~ ^[0-9]+$ ]] || { echo "kfuzz-vng: --timeout needs seconds" >&2; exit 2; }
+  t=$(( $2 * $(jq -r .timeout_mult <<<"$h") )); shift 2
+fi
+cmd=(vng); f=$(jq -r .vng_flags <<<"$h"); [ -n "$f" ] && cmd+=($f)
+cmd+=("$@")
+[ -n "$t" ] && cmd=(timeout --foreground -k 30 "$t" "${cmd[@]}")
+[ "$(jq -r .accel <<<"$h")" = tcg ] && echo "kfuzz-vng: TCG mode (no KVM); expect ~10x slower boots and runs${t:+, timeout ${t}s}" >&2
+if [ "${KFUZZ_VNG_DRYRUN:-0}" = 1 ]; then printf '%q ' "${cmd[@]}"; echo; exit 0; fi
+exec "${cmd[@]}"

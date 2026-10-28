@@ -12,4 +12,4 @@ Arguments: `$ARGUMENTS`
 4. Loop `/cc-kfuzz:kfuzz-tick` while the directive is a `run` or `dispatch` of setup work (`kres-build -d`, `kfuzz-launch start`), at most 5 times. Kernel builds are detached: when the tick reports `done reason="kernel build in progress"`, tell the operator to re-run this skill or `/cc-kfuzz:kfuzz-tick` later (or `/loop 10m /cc-kfuzz:kfuzz-tick`).
 5. Report `/cc-kfuzz:kfuzz-status`.
 
-Without KVM, say plainly that fuzzing under TCG finds little and suggest `/cc-kfuzz:kfuzz-repro <syzbot extid>` for triage work on this VM, with long campaigns on the KVM runner.
+Without KVM the campaign runs under TCG (`kfuzz-host`; force it with `KFUZZ_ACCEL=tcg`). Say so once with the numbers from `kfuzz-host` (VMs, x10 slowdown), keep the plan narrow, and note that the hosted VM pauses when the session is idle, so syz-manager only runs while the session is active. Long broad campaigns belong on the KVM runner.

@@ -1,13 +1,13 @@
 ---
 name: kfuzz-yolo
 description: Toggle the self-driving kernel fuzzing loop. `on` sets the YOLO caps in kfuzz/state/budget.json and runs a tick; quiet ticks chain the next one via ScheduleWakeup until a cap, a halt, or `off`. Intended for the KVM runner.
-argument-hint: "on [--interval SEC] [--max-ticks N] | off [--reason TEXT] | status"
+argument-hint: "on [--interval SEC] [--max-ticks N] [--allow-tcg] | off [--reason TEXT] | status"
 ---
 <!-- adapted from cc-fuzzer skills/yolo/SKILL.md @ 478a126; see UPSTREAM.lock -->
 
 Arguments: `$ARGUMENTS`
 
-- `on ...`: run `kfuzz-yolo-state on <flags>`. Check `kres-doctor` for `kvm=yes`; without KVM warn that each tick is slow and the hosted VM pauses when idle, and ask before continuing. Then run `/cc-kfuzz:kfuzz-tick`.
+- `on ...`: run `kfuzz-yolo-state on <flags>`. Under TCG (`kfuzz-host accel` = `tcg`) it refuses unless `--allow-tcg` is given, and raises the interval to `kfuzz-host min_interval`; with the flag, say once that ticks are slow and that a hosted VM pauses when idle. Then run `/cc-kfuzz:kfuzz-tick`.
 - `off ...`: run `kfuzz-yolo-state off <flags>`. Any pending wakeup will find YOLO off and stop.
 - `status` (default): run `kfuzz-yolo-state status` and `kfuzz-launch status`.
 
