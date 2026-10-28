@@ -32,6 +32,6 @@ If the orchestrator's reply has no `YOLO_NEXT:` line, do not re-dispatch it. Run
 
 Redirect a stalled specialist with `SendMessage` first; re-dispatch with a fresh minimal prompt only if that fails. Never do the specialist's work on this thread.
 
-## Anthropic-hosted VM
+## Hosted cloud VM
 
 The VM pauses when idle, so long self-chained ticks do not survive there. Tick by hand or with `/loop`; keep `/cc-kfuzz:kfuzz-yolo` for the KVM runner.
