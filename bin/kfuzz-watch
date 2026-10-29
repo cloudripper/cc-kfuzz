@@ -1,0 +1,37 @@
+#!/bin/bash
+# kfuzz-watch -- plugin monitor (monitors/monitors.json, when: always): one line per campaign event,
+# which Claude Code delivers to the session as a notification, so ticks are event-driven
+# instead of polled. Silent otherwise. Events:
+#   new crash dir under kfuzz/syz/crashes/      -> run /cc-kfuzz:kfuzz-tick (triage)
+#   syz-manager pid went from alive to dead     -> run /cc-kfuzz:kfuzz-tick (restart_manager)
+#   <kernel out>/build.status left "running"    -> run /cc-kfuzz:kfuzz-tick (rebuild finished)
+# Env: KFUZZ_DIR (default $PWD/kfuzz)  KFUZZ_WATCH_INTERVAL (30 s)  KFUZZ_WATCH_ONCE=1 (one pass; tests)
+set -uo pipefail
+K=${KFUZZ_DIR:-$PWD/kfuzz}; IV=${KFUZZ_WATCH_INTERVAL:-30}
+crashes() { ls -1 "$K/syz/crashes" 2>/dev/null | sort; }
+alive() { local p; p=$(cat "$K/syz/manager.pid" 2>/dev/null || echo 0); [[ $p =~ ^[0-9]+$ ]] && [ "$p" -gt 0 ] && kill -0 "$p" 2>/dev/null; }
+outdir() { jq -r '.kernel_obj // empty' "$K/syz/manager.cfg" 2>/dev/null || true; }
+bstat() { local o; o=$(outdir); o=${o:-${KFUZZ_KERNEL_OUT:-/work/out/syzkaller}}; head -c 40 "$o/build.status" 2>/dev/null | awk '{print $1}'; }
+
+seen=$(crashes); was_alive=0; alive && was_alive=1; last_build=$(bstat)
+[ -n "${KFUZZ_WATCH_SEED:-}" ] && seen=$KFUZZ_WATCH_SEED   # tests: pretend these were present at start
+while :; do
+  now=$(crashes)
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    t=$(head -1 "$K/syz/crashes/$h/description" 2>/dev/null)
+    echo "kfuzz: new crash $h: ${t:-untitled}. Run /cc-kfuzz:kfuzz-tick to triage."
+  done < <(comm -13 <(printf '%s\n' "$seen") <(printf '%s\n' "$now"))
+  seen=$now
+  if alive; then was_alive=1
+  elif [ $was_alive = 1 ]; then
+    echo "kfuzz: syz-manager stopped (see kfuzz/syz/manager.log). Run /cc-kfuzz:kfuzz-tick."; was_alive=0
+  fi
+  b=$(bstat)
+  if [ "$last_build" = running ] && [ -n "$b" ] && [ "$b" != running ]; then
+    echo "kfuzz: kernel build finished: $b. Run /cc-kfuzz:kfuzz-tick."
+  fi
+  last_build=$b
+  [ "${KFUZZ_WATCH_ONCE:-0}" = 1 ] && exit 0
+  sleep "$IV"
+done

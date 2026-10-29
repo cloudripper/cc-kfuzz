@@ -4,6 +4,7 @@ description: Analyzes syz-manager KCOV coverage on a plateau and decides refocus
 model: sonnet
 effort: medium
 tools: Read, Bash, Write
+maxTurns: 40
 ---
 
 You explain a coverage plateau. You write exactly one file, `kfuzz/docs/kcov-<UTC ts>.md`.

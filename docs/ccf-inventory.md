@@ -142,6 +142,22 @@ cc-fuzzer evaluates `import nixpkgs { inherit system; }`, so an override target 
 | hooks: `gate-findings.sh` | reuse-as-is (pattern adapted) | see global hooks table; cc-kfuzz `hooks/gate-verified.sh` mirrors it |
 | hooks: `dedup-calls.sh`, `ledger-append.sh`, `gate-verify-build.sh`, `sweep-gate.sh` | reuse-as-is / n/a | fire globally; harmless for kfuzz |
 
+## Upstream issues found (cc-fuzzer @ 478a126, Claude Code 2.1.312)
+
+Checked against the Claude Code docs (plugins, sub-agents, hooks, tools, scheduled tasks, mods reference) on 2026-10-29. cc-kfuzz works around each one; none needs a cc-fuzzer edit to keep cc-kfuzz working.
+
+| # | Issue | Evidence | Effect | Suggested upstream fix | cc-kfuzz handling |
+|---|---|---|---|---|---|
+| 1 | Write gate matches any `findings` path component, under any parent, and anywhere in a Bash command's text | `src/cc_fuzzer_core/gate.py` `_dir_re` and the `\bfindings/` fallback in `_touches`; refused `kfuzz/findings/x` and a commit message that mentioned `findings/` | Any project with a `findings/` directory is blocked whenever cc-fuzzer is loaded, even with no `fuzz/` campaign | Anchor to the campaign's `fuzz/` root (resolve the path against `CC_FUZZER_PROJECT_ROOT`) and match paths, not free text | `kfuzz/verified/`; `UPSTREAM.lock` greps the gate |
+| 2 | Every Bash call spawns four Python-backed hooks with no `if` filter | `hooks/hooks.json`; measured 266 + 258 + 45 ms PreToolUse and 183 ms PostToolUse per call on this VM | About 0.5-0.75 s added to every Bash call in the session, cc-kfuzz's included | Add `if` conditions (hooks doc, "if field"), e.g. gate-findings only on `Bash(*findings*)` / `Write(**/findings/**)`, detect-crashes only when a `fuzz/` campaign exists; or move the gates to a mod `tool.call` hook (in-process, no spawn) | none possible from a sibling plugin; cc-kfuzz's own gate costs 15 ms |
+| 3 | YOLO calls `ScheduleWakeup` outside `/loop` | `skills/yolo/SKILL.md`, `skills/tick/SKILL.md`, STATE_SCHEMA `schedule` directive | tools-reference: `ScheduleWakeup` "reschedules the next iteration of a self-paced `/loop` ... you don't call it directly"; outside a loop the chain relies on undocumented behavior | Start YOLO as a self-paced `/loop /cc-fuzzer:tick` and map `halt`/`inactive` to `ScheduleWakeup(stop: true)` | `kfuzz-yolo` starts `Skill(loop, "/cc-kfuzz:kfuzz-tick")` |
+| 4 | Tick dispatches the orchestrator without choosing foreground | `skills/tick/SKILL.md` step 2 | sub-agents doc: subagents spawned from the main conversation start in the background by default, so the directive arrives as a later notification and the tick can end before acting on it | Pass `run_in_background: false` for decision agents (orchestrator, ops-runner) | `kfuzz-tick` dispatches the orchestrator in the foreground |
+| 5 | Rationale "no subagent can spawn another subagent" is stale | STATE_SCHEMA "The `YOLO_NEXT:` next-action directive"; `agents/fuzz-orchestrator.md` | sub-agents doc: nesting is allowed up to 3 layers by default when `Agent` is in `tools`. The design still holds because no cc-fuzzer agent lists `Agent`, but the text states it as a platform limit | Reword as a design choice (decision agents stay cheap and deterministic) | same choice, worded as a choice |
+| 6 | Contract says Grep/Glob are absent on Linux | `claude-code.contract.json` semantics | tools-reference: on Linux a subagent can receive Glob and Grep even when the main conversation doesn't | Re-verify and update the contract entry | agents list only `Read, Bash, Write` |
+| 7 | Long waits rely on polling | agents poll fuzzer logs | Bash `run_in_background` (notifies on exit) and the Monitor tool replace sleep loops; plugins can ship `monitors/monitors.json` for event-driven wakeups | Use `run_in_background` waits and a crash-dir monitor | `kfuzz-wait`, `kfuzz-watch` monitor |
+
+Environment issue found at the same time (kres setup, not cc-fuzzer): the cached VM snapshot kept the old marketplace install of cc-fuzzer (`/opt/cc-fuzzer`, enabled in `~/.claude/settings.json`), so two copies loaded (`cc-fuzzer@cc-fuzzer` and `cc-fuzzer@inline`) and every cc-fuzzer hook ran twice. The setup script now removes it.
+
 ## Rules
 
 | Path | Class |

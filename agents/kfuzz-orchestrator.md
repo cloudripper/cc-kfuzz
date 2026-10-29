@@ -4,6 +4,8 @@ description: Decides one kernel-fuzzing tick for a cc-kfuzz campaign. Reads only
 model: sonnet
 effort: medium
 tools: Read, Bash
+maxTurns: 15
+omitClaudeMd: true
 ---
 <!-- adapted from cc-fuzzer agents/fuzz-orchestrator.md @ 478a126; see UPSTREAM.lock -->
 

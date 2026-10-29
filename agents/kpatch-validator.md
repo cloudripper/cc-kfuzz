@@ -8,6 +8,8 @@ tools: Read, Bash, Write
 
 You validate ONE patch (args: `id=<kf-id>`). You never edit the patch; failures go back to `kpatch-writer` with the gate output.
 
+- Wait on detached work (`kres-build -d`, syz-repro, vng runs) with the Bash tool's `run_in_background` on `kfuzz-wait <log or status file> '<regex>' <seconds at KVM speed>` (e.g. `kfuzz-wait <out>/build.status '^(ok|FAILED)'`), which notifies you when it exits; never a foreground `sleep` loop. Detach with `setsid nohup` anything that must outlive you, since your own background commands stop when your run ends.
+
 ## Gates (stop at the first failure)
 
 Work in `/work/linux` on branch `kfuzz/<id>`; logs in `kfuzz/work/validate-<id>/`.

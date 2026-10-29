@@ -94,6 +94,14 @@ r=$(KFUZZ_KVM_DEV=$T/kvm kfuzz-update-current); [ "$(jq -r .branch <<<"$r")/$(jq
 KFUZZ_KVM_DEV=$T/kvm kfuzz-findings drop def456 flaky "kvm too" >/dev/null
 [ "$(KFUZZ_KVM_DEV=$T/kvm kfuzz-update-current | jq -r .branch)" != repro ] && ok "kvm drop not retried" || bad "kvm drop retried"
 
+# 6c. kfuzz-watch (plugin monitor) and kfuzz-wait
+w=$(KFUZZ_WATCH_ONCE=1 KFUZZ_WATCH_SEED="abc123" kfuzz-watch)
+[[ $w == *"new crash def456: WARNING in bar"* && $w != *"abc123"* ]] && ok "watch: reports only new crash dirs" || bad "watch new crash" "$w"
+[ -z "$(KFUZZ_WATCH_ONCE=1 kfuzz-watch)" ] && ok "watch: silent with nothing new" || bad "watch silent"
+echo "x" > "$T/st"; ( sleep 1; echo "ok 12s" >> "$T/st" ) &
+[ "$(KFUZZ_KVM_DEV=$T/kvm kfuzz-wait "$T/st" '^(ok|FAILED)' 20)" = "ok 12s" ] && ok "wait: matches" || bad "wait match"
+KFUZZ_KVM_DEV=$T/kvm kfuzz-wait "$T/st" '^never' 0 2>/dev/null; [ $? = 1 ] && ok "wait: times out" || bad "wait timeout"
+
 # 7. gate
 g() { jq -cn --arg t "$1" --arg k "$2" --arg v "$3" '{tool_name:$t, tool_input:{($k):$v}}' | "$ROOT/hooks/gate-verified.sh"; }
 denied() { [ -n "$(g "$@")" ]; }
@@ -104,6 +112,13 @@ denied Bash command "kfuzz-findings attach kf-0001 a.log; rm -rf kfuzz/verified"
 denied Bash command "kfuzz-findings attach kf-0001 kfuzz/work/a/bisect.log" && bad "gate: writer" || ok "gate: writer allowed"
 denied Bash command "cat kfuzz/verified/kf-0001/repro.c" && bad "gate: read" || ok "gate: read allowed"
 denied Write file_path "$KFUZZ_DIR/work/abc123/notes" && bad "gate: work/" || ok "gate: work/ allowed"
+denied Bash command "echo x | tee kfuzz/verified/a" && ok "gate: tee in pipe denied" || bad "gate: tee in pipe"
+denied Bash command "sudo cp a kfuzz/verified/kf-0001/x" && ok "gate: sudo cp denied" || bad "gate: sudo cp"
+denied Bash command "sed -i s/a/b/ kfuzz/verified/kf-0001/meta.json" && ok "gate: sed -i denied" || bad "gate: sed -i"
+denied Bash command "cat > kfuzz/verified/x <<EOF" && ok "gate: heredoc into bundle denied" || bad "gate: heredoc into"
+denied Bash command "$(printf 'python3 - <<EOF\nprint("kfuzz/verified/ -> notes")\nEOF')" && bad "gate: mention in heredoc text" || ok "gate: mention in heredoc text allowed"
+denied Bash command "git commit -m 'bundles live in kfuzz/verified/ now' > /dev/null" && bad "gate: mention in commit message" || ok "gate: mention in commit message allowed"
+denied Bash command "ls kfuzz/verified/ > /tmp/list" && bad "gate: redirect elsewhere" || ok "gate: redirect elsewhere allowed"
 
 # 8. compat against the real cc-fuzzer, and a broken lock
 if kfuzz-ccf >/dev/null 2>&1; then

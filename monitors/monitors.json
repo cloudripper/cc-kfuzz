@@ -1,0 +1,8 @@
+[
+  {
+    "name": "kfuzz-watch",
+    "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/kfuzz-watch",
+    "description": "kfuzz campaign events: new crashes, syz-manager exit, kernel build done",
+    "when": "always"
+  }
+]

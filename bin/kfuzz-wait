@@ -1,0 +1,16 @@
+#!/bin/bash
+# kfuzz-wait <file> <ERE> [seconds at KVM speed] -- block until <file> has a line matching <ERE>.
+# For agents waiting on detached work (kres-build -d, syz-repro, vng runs): run it with the Bash
+# tool's run_in_background, which notifies on exit, instead of a sleep loop in the foreground.
+# The timeout (default 1800) is multiplied by kfuzz-host timeout_mult, so it means the same under TCG.
+# Exit 0 matched (prints the line), 1 timed out, 2 usage.
+set -uo pipefail
+f=${1:-}; re=${2:-}; t=${3:-1800}
+[ -n "$f" ] && [ -n "$re" ] && [[ $t =~ ^[0-9]+$ ]] || { echo "usage: kfuzz-wait <file> <ERE> [seconds]" >&2; exit 2; }
+m=$("$(dirname "$(readlink -f "$0")")/kfuzz-host" timeout_mult 2>/dev/null || echo 1)
+end=$(( $(date +%s) + t * m ))
+while [ "$(date +%s)" -lt "$end" ]; do
+  l=$(grep -E -m1 -- "$re" "$f" 2>/dev/null) && { echo "$l"; exit 0; }
+  sleep 5
+done
+echo "kfuzz-wait: timed out after $(( t * m ))s waiting for /$re/ in $f" >&2; exit 1

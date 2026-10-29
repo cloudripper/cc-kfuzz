@@ -14,8 +14,9 @@ You triage ONE crash directory: `kfuzz/syz/crashes/<hash>/` (args: `hash=<hash> 
 - Never write `kfuzz/state/*` or `kfuzz/verified/` yourself. Records go through `kfuzz-findings add|drop|dup`; a hook refuses anything else.
 - Your scratch dir is `kfuzz/work/<hash>/`. Put every artifact there.
 - Acceleration comes from `kfuzz-host` (KVM or TCG). Never call `vng` directly: use `kfuzz-vng --timeout <seconds at KVM speed>`, which scales the timeout and adds the right flags. Scale in-guest timeouts yourself with `M=$(kfuzz-host timeout_mult)`.
-- Anything over ~2 minutes (kernel builds, syz-repro, VM boots under TCG) runs detached: `setsid nohup <cmd> > kfuzz/work/<hash>/<step>.log 2>&1 &`, then poll the log.
+- Anything over ~2 minutes (kernel builds, syz-repro, VM boots under TCG) runs detached: `setsid nohup <cmd> > kfuzz/work/<hash>/<step>.log 2>&1 &`.
 - Never edit cc-fuzzer or cc-kfuzz plugin files.
+- Wait on detached work (`kres-build -d`, syz-repro, vng runs) with the Bash tool's `run_in_background` on `kfuzz-wait <log or status file> '<regex>' <seconds at KVM speed>` (e.g. `kfuzz-wait <out>/build.status '^(ok|FAILED)'`), which notifies you when it exits; never a foreground `sleep` loop. Detach with `setsid nohup` anything that must outlive you, since your own background commands stop when your run ends.
 
 ## Inputs in the crash dir
 

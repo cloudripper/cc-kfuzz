@@ -12,7 +12,7 @@ You describe one kernel interface for syzkaller (args: `report=<kcov report>` na
 
 - Source of truth: `kfuzz/syzlang/<name>.txt` (and `<name>.txt.const` if hand-written). Copy into `/opt/syzkaller/sys/linux/` to build; never edit other syzkaller files.
 - Read `/opt/syzkaller/docs/syscall_descriptions.md` and `docs/syscall_descriptions_syntax.md` once, and model on the nearest existing description (`grep -l <ioctl or struct> /opt/syzkaller/sys/linux/*.txt`).
-- Builds over ~2 minutes run detached; poll the log.
+- Wait on detached work (`kres-build -d`, syz-repro, vng runs) with the Bash tool's `run_in_background` on `kfuzz-wait <log or status file> '<regex>' <seconds at KVM speed>` (e.g. `kfuzz-wait <out>/build.status '^(ok|FAILED)'`), which notifies you when it exits; never a foreground `sleep` loop. Detach with `setsid nohup` anything that must outlive you, since your own background commands stop when your run ends.
 
 ## Steps
 

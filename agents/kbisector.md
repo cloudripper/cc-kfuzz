@@ -15,6 +15,8 @@ You bisect ONE finding (args: `id=<kf-id> [mode=cause|fix] [good=<ref>] [bad=<re
 - Needs full history: if `git -C /work/linux rev-parse --is-shallow-repository` is `true`, stop with `bisect_status skipped` and say "refetch with KRES_DEPTH=0 kres-fetch-kernel" (about 5 GB; ask before doing it).
 - Every build is detached (`kres-build -d <out>`; poll `<out>/build.status`). Use a dedicated out dir `/work/out/bisect` with the finding's config (`kfuzz/verified/<id>/` meta `config`, from `kfuzz/configs/`), and keep only it plus the campaign dir (disk is tight).
 
+- Wait on detached work (`kres-build -d`, syz-repro, vng runs) with the Bash tool's `run_in_background` on `kfuzz-wait <log or status file> '<regex>' <seconds at KVM speed>` (e.g. `kfuzz-wait <out>/build.status '^(ok|FAILED)'`), which notifies you when it exits; never a foreground `sleep` loop. Detach with `setsid nohup` anything that must outlive you, since your own background commands stop when your run ends.
+
 ## Test step (`kfuzz/work/bisect-<id>/test.sh`, used by `git bisect run`)
 
 1. `make olddefconfig` with the finding's config, build bzImage; build failure → exit 125 (skip).
