@@ -6,7 +6,7 @@
 #   adapted=<src> -> <dst> blob=<sha>  cc-kfuzz file adapted from upstream <src>; blob is
 #                                      `git hash-object <src>` at tested_ref. src missing = FAIL,
 #                                      blob changed = NOTE (port by hand; see README "Bumping cc-fuzzer").
-tested_ref=478a12616bfcc8650d36d9ec2fbcd466f68d6e2f
+tested_ref=ff2598ec27caba9180bbac5d1500d682ef8aeb6b
 name=cc-fuzzer
 
 # reuse-as-is
@@ -27,15 +27,16 @@ grep=STATE_SCHEMA.md:YOLO_NEXT: dispatch agent=
 grep=STATE_SCHEMA.md:YOLO_NEXT: run script=
 grep=STATE_SCHEMA.md:YOLO_NEXT: schedule delay=
 grep=STATE_SCHEMA.md:YOLO_NEXT: halt reason=
-# cc-fuzzer's write gate refuses any path with a "findings" directory component,
-# under any parent; kfuzz keeps verified bundles in kfuzz/verified/ because of it.
+# cc-fuzzer's write gate: before 0.49.2 it refused any path with a "findings" component
+# under any parent, which is why kfuzz keeps verified bundles in kfuzz/verified/; since
+# 0.49.2 it protects fuzz/findings/ only. A rename of the constant is worth a look.
 grep=src/cc_fuzzer_core/gate.py:FINDINGS_DIR = "findings"
 
 # adapted
 adapted=agents/fuzz-orchestrator.md -> agents/kfuzz-orchestrator.md blob=65d439369cea0d0a9310a8b86d6cade6fbd14507
 adapted=agents/crash-triager.md -> agents/kcrash-triager.md blob=063b85eacf4c3e13765df018375ff239f282ee96
-adapted=skills/tick/SKILL.md -> skills/kfuzz-tick/SKILL.md blob=3ad7be26e0cc65de2b1393c21c69fc1d0925259f
-adapted=skills/yolo/SKILL.md -> skills/kfuzz-yolo/SKILL.md blob=41af44cc2dc834f06d5a759f9b7e58d6596abdeb
+adapted=skills/tick/SKILL.md -> skills/kfuzz-tick/SKILL.md blob=515b0e03617d090695322a41c100ad389cf5e246
+adapted=skills/yolo/SKILL.md -> skills/kfuzz-yolo/SKILL.md blob=b0b9b23ed90872aead9fd326e8c3a3a1c2115bbb
 adapted=skills/doctor/SKILL.md -> skills/kfuzz-doctor/SKILL.md blob=b8902d2f9625684cbe49fe9b2e4787664137e0d9
 adapted=skills/fuzz-status/SKILL.md -> skills/kfuzz-status/SKILL.md blob=504dad77a063be55298de299d377a14f974fb08c
 adapted=scripts/update-current.sh -> bin/kfuzz-update-current blob=717b2f9825b76d35c7a89c5de1794db2a41fd268

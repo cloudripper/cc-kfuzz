@@ -146,6 +146,8 @@ cc-fuzzer evaluates `import nixpkgs { inherit system; }`, so an override target 
 
 Checked against the Claude Code docs (plugins, sub-agents, hooks, tools, scheduled tasks, mods reference) on 2026-10-29. cc-kfuzz works around each one; none needs a cc-fuzzer edit to keep cc-kfuzz working.
 
+**Status: #1-#6 fixed upstream in cc-fuzzer 0.49.2 (`ff2598e`)**, which cc-kfuzz now pins (`UPSTREAM.lock`). #2 by building only the named subsystem's CLI parser (hooks ~0.75 s to ~0.4 s per Bash call) rather than `if` filters, which would have to know each campaign's configured `protected_dirs`. #7 is a suggestion, not adopted. The same release fixed cc-fuzzer's CI, red since 0.36 (subprocess `PYTHONPATH` and the manifest step's plugin trees). cc-kfuzz keeps `kfuzz/verified/`: the name stays valid after the fix.
+
 | # | Issue | Evidence | Effect | Suggested upstream fix | cc-kfuzz handling |
 |---|---|---|---|---|---|
 | 1 | Write gate matches any `findings` path component, under any parent, and anywhere in a Bash command's text | `src/cc_fuzzer_core/gate.py` `_dir_re` and the `\bfindings/` fallback in `_touches`; refused `kfuzz/findings/x` and a commit message that mentioned `findings/` | Any project with a `findings/` directory is blocked whenever cc-fuzzer is loaded, even with no `fuzz/` campaign | Anchor to the campaign's `fuzz/` root (resolve the path against `CC_FUZZER_PROJECT_ROOT`) and match paths, not free text | `kfuzz/verified/`; `UPSTREAM.lock` greps the gate |
